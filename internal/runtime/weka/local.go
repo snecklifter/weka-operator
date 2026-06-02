@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/weka/go-weka-observability/instrumentation"
 	"github.com/weka/weka-operator/internal/runtime/cmdutil"
 	"github.com/weka/weka-operator/internal/runtime/config"
 )
@@ -35,22 +36,31 @@ func StartStemContainer(_ context.Context) error {
 }
 
 // EnsureContainerExec polls until the named container accepts exec commands.
-// Polls every 1s with a 300s total timeout.
+// Polls every 2s with a 300s total timeout, matching Python asyncio.sleep(2) at weka_runtime.py:3055.
 // Mirrors Python ensure_container_exec() at weka_runtime.py:3055.
 func EnsureContainerExec(ctx context.Context, name string) error {
+	_, logger := instrumentation.CreateLogSpan(ctx, "weka.EnsureContainerExec", "container", name)
+	defer logger.End()
+
+	// Mirror Python: logging.info("ensuring container exec") at weka_runtime.py:3145
+	logger.Info("ensuring container exec")
+
 	deadline := time.Now().Add(300 * time.Second)
 	for {
 		err := cmdutil.Run(ctx, "weka", "local", "exec", "--container", name, "--", "ls")
 		if err == nil {
+			// Mirror Python: logging.info("container exec ensured") at weka_runtime.py:3154
+			logger.Info("container exec ensured")
 			return nil
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("container %q not exec-ready after 5 minutes: %w", name, err)
 		}
+		logger.Info("waiting for container exec to become ready", "container", name)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(1 * time.Second):
+		case <-time.After(2 * time.Second):
 		}
 	}
 }
@@ -68,20 +78,20 @@ func ConfigureTraces(ctx context.Context, cfg *config.Config, name string) error
 	}
 
 	const (
-		oldFullLocation    = "/data/reserved_space/dumper_config.json.override"
-		legacyPartialLoc   = "/data/reserved_space/dumper_config_overrides.json"
-		newPartialLoc      = "/traces/config_overrides.json"
-		stagingPath        = "/opt/weka/k8s-scripts/dumper_config.json.override"
+		oldFullLocation  = "/data/reserved_space/dumper_config.json.override"
+		legacyPartialLoc = "/data/reserved_space/dumper_config_overrides.json"
+		newPartialLoc    = "/traces/config_overrides.json"
+		stagingPath      = "/opt/weka/k8s-scripts/dumper_config.json.override"
 	)
 
 	switch mode {
 	case "override":
 		data := map[string]interface{}{
-			"enabled":               true,
+			"enabled":                 true,
 			"ensure_free_space_bytes": cfg.EnsureFreeSpaceGB * 1024 * 1024 * 1024,
-			"retention_bytes":       cfg.MaxTraceCapacityGB * 1024 * 1024 * 1024,
-			"retention_type":        "BYTES",
-			"version":               1,
+			"retention_bytes":         cfg.MaxTraceCapacityGB * 1024 * 1024 * 1024,
+			"retention_type":          "BYTES",
+			"version":                 1,
 			"freeze_period": map[string]interface{}{
 				"start_time": "0001-01-01T00:00:00+00:00",
 				"end_time":   "0001-01-01T00:00:00+00:00",
@@ -93,8 +103,8 @@ func ConfigureTraces(ctx context.Context, cfg *config.Config, name string) error
 	case "partial-override":
 		data := map[string]interface{}{
 			"ensure_free_space_bytes": cfg.EnsureFreeSpaceGB * 1024 * 1024 * 1024,
-			"retention_bytes":       cfg.MaxTraceCapacityGB * 1024 * 1024 * 1024,
-			"retention_type":        "BYTES",
+			"retention_bytes":         cfg.MaxTraceCapacityGB * 1024 * 1024 * 1024,
+			"retention_type":          "BYTES",
 		}
 		dest := legacyPartialLoc
 		if cfg.Features.TracesOverrideInSlashTraces {
@@ -121,7 +131,7 @@ func ConfigureTraces(ctx context.Context, cfg *config.Config, name string) error
 			ensureFreeBytes = cfg.EnsureFreeSpaceGB * 1024 * 1024 * 1024
 		}
 		ssdCfg := map[string]interface{}{
-			"enabled":               true,
+			"enabled":                 true,
 			"ensure_free_space_bytes": ensureFreeBytes,
 			"freeze_period": map[string]interface{}{
 				"comment":    "",
