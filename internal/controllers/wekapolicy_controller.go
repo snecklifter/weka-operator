@@ -77,6 +77,18 @@ func (r *WekaPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 	logger.Info("Reconciling WekaPolicy", "type", wekaPolicy.Spec.Type)
 
+	// A configuration policy carries operator-wide settings that other reconcilers read on demand.
+	// There is no run to schedule, so it branches out before the interval gate and the
+	// Running/Done status machinery below.
+	if wekaPolicy.Spec.Payload.Configuration != nil {
+		return r.reconcileConfiguration(ctx, wekaPolicy)
+	}
+
+	policyType, err := ResolvePolicyType(&wekaPolicy.Spec)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	loop := &policyLoop{
 		Policy: wekaPolicy,
 		Client: r.Client,
@@ -134,7 +146,7 @@ func (r *WekaPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		ServiceAccountName: wekaPolicy.Spec.ServiceAccountName,
 	})
 
-	switch wekaPolicy.Spec.Type {
+	switch policyType {
 	case weka.WekaPolicyTypeSignDrives:
 		signDrivesOp := operations.NewSignDrivesOperation(
 			r.Mgr,
@@ -211,7 +223,7 @@ func (r *WekaPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		)
 		loop.Op = staleVidsOp
 	default:
-		return ctrl.Result{}, fmt.Errorf("unknown policy type: %s", wekaPolicy.Spec.Type)
+		return ctrl.Result{}, fmt.Errorf("unknown policy type: %s", policyType)
 	}
 
 	steps := loop.Op.GetSteps()
